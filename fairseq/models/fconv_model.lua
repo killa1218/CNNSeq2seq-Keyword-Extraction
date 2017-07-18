@@ -26,7 +26,7 @@ local utils = require 'fairseq.utils'
 
 local cuda = utils.loadCuda()
 
-local function attentionLayers(nlayer, attnlayers)
+local function attentionLayers(nlayer, attnlayers) -- 设置 Attention
     local attnlayersTab = tds.Hash(pltablex.index_map(
         pltablex.map(function(n) return tonumber(n) end,
                       plutils.split(attnlayers, ','))

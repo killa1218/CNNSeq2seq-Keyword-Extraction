@@ -11,6 +11,7 @@
 --
 --]]
 
+local argcheck = require 'argcheck'
 require 'rnnlib'
 require 'xlua'
 require 'optim'
@@ -29,6 +30,7 @@ local cuda = utils.loadCuda()
 assert(cuda.cutorch)
 
 local cmd = torch.CmdLine()
+-- 定义 fairseq train 的参数列表
 cmd:option('-sourcelang', 'de', 'source language')
 cmd:option('-targetlang', 'en', 'target language')
 cmd:option('-datadir', 'data-bin')
@@ -191,7 +193,7 @@ local thread_init_fn = function(id)
     cutorch.manualSeed(seed + id - 1)
 end
 
-local make_model_fn = function(id)
+local make_model_fn = function(id) -- 加载模型
     local model = require(
         string.format('fairseq.models.%s_model',
             config.model)

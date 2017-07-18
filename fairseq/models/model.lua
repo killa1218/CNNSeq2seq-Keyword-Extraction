@@ -29,6 +29,7 @@ Default constructor. This will construct a network by calling `make()`.
     end
 }
 
+-- 返回make方法返回的对象
 Model.network = argcheck{
     doc=[[
 Returns the encapsulated nn.Module instance.
@@ -39,6 +40,7 @@ Returns the encapsulated nn.Module instance.
     end
 }
 
+-- netword():type()的alias
 Model.type = argcheck{
     doc=[[
 Shorthand for network():type()
@@ -67,6 +69,7 @@ function Model:cuda(...)
     return self:type('torch.CudaTensor',...)
 end
 
+-- 抽象方法，需要子类实现
 Model.make = argcheck{
     doc=[[
 Constructs a new network as a nn.Module instance.
@@ -77,6 +80,7 @@ Constructs a new network as a nn.Module instance.
     end
 }
 
+-- 基类是个空方法
 Model.resizeCriterionWeights = argcheck{
     doc=[[
 Resize criterion weights to accomadate per sample target vocabulary.
