@@ -1,6 +1,9 @@
 ## IDE
 .idea
 cmake-build-debug
+.settings
+.project
+.buildpath
 
 
 ## Project
