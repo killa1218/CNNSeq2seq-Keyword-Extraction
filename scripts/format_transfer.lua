@@ -34,7 +34,7 @@ function calcSimWithOneKeyword(word, phrase) -- Calculate similarity between one
     local sum = 0
     
     for _, part in pairs(phraseParts) do -- 将keyphrase中的每个单词与word做内积，然后取内积们的均值
-        local emb2 = glove.word2vec(part)
+        local emb2 = glove:word2vec(part)
         
         sum = sum + emb1:dot(emb2)
     end
