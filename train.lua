@@ -41,13 +41,13 @@ cmd:option('-nhid', 256, 'number of hidden units per layer')
 cmd:option('-nlayer', 1, 'number of hidden layers in decoder')
 cmd:option('-nenclayer', 1, 'number of hidden layers in encoder')
 cmd:option('-nagglayer', -1,
-    'number of layers for conv encoder aggregation stack (CNN-c)')
+    'number of layers for conv encoder aggregation stack (CNN-c)') -- TODO What is this?
 cmd:option('-kwidth', 3, 'kernel width for conv encoder')
-cmd:option('-klmwidth', 3, 'kernel width for convolutional language models')
+cmd:option('-klmwidth', 3, 'kernel width for convolutional language models') -- TODO What is this?
 cmd:option('-optim', 'sgd', 'optimization algortihm {sgd|adam|nag}')
 -- See note about normalization and hyper-parameters below
 cmd:option('-timeavg', false,
-    'average gradients over time (as well as sequences)')
+    'average gradients over time (as well as sequences)') -- TODO What is this?
 cmd:option('-lr', 0.1, 'learning rate (per time step without -timeavg)')
 cmd:option('-lrshrink', 10, 'learning rate shrinking factor for annealing')
 cmd:option('-momentum', 0, 'momentum for sgd/nag optimizers')
@@ -55,7 +55,7 @@ cmd:option('-annealing_type', 'fast',
     'whether to decrease learning rate with a fast or slow schedule')
 cmd:option('-noearlystop', false, 'no early stopping for Adam/Adagrad')
 cmd:option('-batchsize', 32, 'batch size (number of sequences)')
-cmd:option('-bptt', 25, 'back-prop through time steps')
+cmd:option('-bptt', 25, 'back-prop through time steps') -- TODO What is this?
 cmd:option('-maxbatch', 0, 'maximum number of tokens per batch')
 cmd:option('-clip', 25,
     'clip threshold of gradients (per sequence without -timeavg)')
