@@ -66,7 +66,7 @@ function processKe20k(dir)
     local word2idx = {}
     local idx2word = {}
     local word2count = {}
-    local idx2vec = {torch.DoubleTensor(300):zero(), glove:word2vec("UNK")}
+    local idx2vec = {torch.FloatTensor(300):zero(), glove:word2vec("UNK")}
     local wordNum = 0 -- Word number in vocab
     local totalAbs = 0
     local validAbs = 0
@@ -159,7 +159,29 @@ function processKe20k(dir)
                                 wordNum = wordNum + 1
                                 word2idx[w] = wordNum + 2 -- Index 1 is for zero vector, 2 is for nil word
                                 idx2word[wordNum + 2] = w
-                                table.insert(idx2vec, glove:word2vec(w))
+                                local emb = glove:word2vec(w)
+                                table.insert(idx2vec, emb)
+                                
+----                                assert(idx2vec[wordNum + 2]:sum() == glove:word2vec(w):sum())
+                                
+--                                -- if idx2vec[wordNum + 2]:sum() ~= glove:word2vec(w):sum() then
+--                                if w == 'A' then
+--                                    local id = word2idx['A']
+--                                    print(id)
+--                                    print(idx2vec[id])
+--                                    print(glove:word2vec('A'))
+--                                    print(glove:word2vec('A'):sum())
+                                    
+----                                    print("")
+----                                    print(w)
+----                                    print(wordNum)
+----                                    print(emb)
+----                                    print(idx2vec[3])
+----                                    print(word2idx)
+----                                    print(word2idx[w])
+----                                    print(idx2vec[word2idx[w]])
+----                                    print(glove:word2vec(w))
+--                                end
                             else
                                 word2count[w] = word2count[w] + 1
                             end
@@ -172,7 +194,7 @@ function processKe20k(dir)
                         end
                     end
                     
-                    table.insert(dataList, torch.IntTensor(maxAbsLength):fill(1)[{{1, wordsNum}}]:copy(torch.Tensor(idxArray)))
+                    table.insert(dataList, torch.LongTensor(maxAbsLength):fill(1)[{{1, wordsNum}}]:copy(torch.Tensor(idxArray)))
                     table.insert(labelList, torch.DoubleTensor(maxAbsLength):fill(0)[{{1, wordsNum}}]:copy(torch.Tensor(labelArray)))
                 end
             end
@@ -188,8 +210,14 @@ function processKe20k(dir)
         
         file:close()
     end
-        
-    local vocab = {idx2word = idx2word, idx2vec = torch.cat(idx2vec, 2):t(), word2idx = word2idx, word2count = word2count, size = wordNum}
+    
+    local i2v = torch.DoubleTensor(wordNum + 2, 300)
+    
+    for i, label in pairs(idx2vec) do
+        i2v[i] = label
+    end
+    
+    local vocab = {idx2word = idx2word, idx2vec = i2v, word2idx = word2idx, word2count = word2count, size = wordNum}
                -- {idx2word: ["word1", "word2"],
                --  idx2vec: Tensor,
                --  word2idx: {word1: idx,
