@@ -7,7 +7,10 @@ math.randomseed(os.time())
 local minAbsLength = 20
 local maxAbsLength = 800
 local minWordCount = 10
-local vocabPath = nil
+local wordCountPath = "/mnt/workspaces/ydtian/CNN-Keyword-Extraction/data/nostem.nopunc.case/ke20k.wordcnt.nostem.nopunc.case.t7"
+local saveWordCount = nil
+local sampleSize = 50
+local dirName = '/mnt/workspaces/ydtian/CNN-Keyword-Extraction/data'
 
 function string:split(sep)
     local sep, fields = sep or " ", {}
@@ -32,7 +35,7 @@ end
 
 function calcSimWithOneKeyword(word, phrase) -- Calculate similarity between one word and one phrase
     local emb1 = glove:word2vec(word)
-    local phraseParts = trimAll(phrase):split(" ")
+    local phraseParts = phrase:trimAll():split(" ")
     local partNum = tableSize(phraseParts)
     local sum = 0
 
@@ -61,11 +64,40 @@ function calcSimWithPhrases(word, phraseArray) -- Calculate similarity between o
     return sum
 end
 
+function findSubArray(tb, subTable)
+    local res = {}
+
+    for i, v in pairs(tb) do
+        if v == subTable[1] then
+            local allEq = true
+            local tmpres = {}
+            tmpres[i] = true
+
+            for j = 1, tableSize(subTable) - 1 do
+                if tb[i + j] ~= nil and tb[i + j] ~= subTable[j + 1] then
+                    allEq = false
+                    break
+                else
+                    tmpres[i + j] = true
+                end
+            end
+
+            if allEq then
+                for k, _ in pairs(tmpres) do
+                    res[k] = true
+                end
+            end
+        end
+    end
+
+    return res
+end
+
 
 function processKe20k(dir)
     local fileList = {"ke20k_testing.json", "ke20k_training.json", "ke20k_validation.json"}
     -- local data = {} -- {data: [[]]
-              --  label: [[]]}
+    --  label: [[]]}
     local word2idx = {}
     local idx2word = {}
     local word2count = {}
@@ -78,11 +110,12 @@ function processKe20k(dir)
     local longestAbs = 0
     local shortestAbs = 100000
     local absTotalLeng = 0 -- Total length of abs.
+    local keywordsRecord = {}
 
     local tmpWord2count = {} -- Count words for futher filting by count
-
-    if vocabPath != nil then
-        tmpWord2count = torch.load(vocabPath).word2count
+    if wordCountPath ~= nil then
+        print("Loading word count file: " .. wordCountPath)
+        tmpWord2count = torch.load(wordCountPath)
     else
         local totalWords = 0
 
@@ -110,8 +143,9 @@ function processKe20k(dir)
                         for idx, w in pairs(words) do
                             if tmpWord2count[w] == nil then
                                 tmpWord2count[w] = 1
-                                io.write("\nCounting words: " .. totalWords)
-                                totalWords += 1
+                                io.write("\rCounting words: " .. totalWords)
+                                io.flush()
+                                totalWords = totalWords + 1
                             else
                                 tmpWord2count[w] = tmpWord2count[w] + 1
                             end
@@ -122,14 +156,20 @@ function processKe20k(dir)
 
             file:close()
         end
+
+        if saveWordCount ~= nil and saveWordCount ~= false then
+            torch.save(saveWordCount, tmpWord2count)
+            print("Word count file saved in " .. saveWordCount)
+        end
     end
 
     for _, fileName in pairs(fileList) do -- Real parse
         print("")
-        print("Processing File: " .. fileName)
+        print("Processing File: " .. fileName .. '...')
         local file = io.open(dir .. "/" .. fileName, 'r')
         local dataList = {} -- Used to store data, each data is a Tensor(1 x maxAbsLength) containing word indexs
         local labelList = {} -- Used to store labels, each is a DoubleTensor(1 x maxAbsLength) containing scores
+        local kwList = {} -- Used to store keywords, each is a String
 
         for l in file:lines() do
             -- l = string.lower(l) -- Convert to lower case
@@ -143,7 +183,7 @@ function processKe20k(dir)
             for i, k in pairs(keywords) do
                 totalKeywords = totalKeywords + 1
 
-                if string.find(abstract, k, 1, true) then
+                if string.find(abstract:lower(), k:lower(), 1, true) then
                     keywordsInAbs = keywordsInAbs + 1
                     found = true
                 end
@@ -163,7 +203,7 @@ function processKe20k(dir)
                     local labelArray = {} -- Temp storage for label item
 
                     for idx, w in pairs(words) do
-                        if tmpWord2count[w] > minWordCount then -- Filt words with low word count
+                        if tmpWord2count[w] ~= nil and tmpWord2count[w] > minWordCount then -- Filt words with low word count
                             if word2count[w] == nil then -- The word appears first time
                                 word2count[w] = 1
                                 wordNum = wordNum + 1
@@ -177,21 +217,27 @@ function processKe20k(dir)
 
                             table.insert(idxArray, word2idx[w])
                             table.insert(labelArray, calcSimWithPhrases(w, keywords)) -- Smoothing
-                            for kpi, kp in pairs(keywords) do
-                                local kws = kp:split(' ')
-                                local equal = true
-
-                                for kwi, kw in pairs(kws) do
-                                    if -- TODO
+                            --table.insert(labelArray, 0) -- No smoothing
                         else
                             table.insert(idxArray, 2)
-                            -- table.insert(labelArray, calcSimWithPhrases("UNK", keywords)) -- Smoothing
-                            table.insert(labelArray, 0) -- No smoothing
+                            table.insert(labelArray, calcSimWithPhrases("UNK", keywords)) -- Smoothing
+                            --table.insert(labelArray, 0) -- No smoothing
+                        end
+                    end
+
+                    -- Replace labels coresponding to keywords to 1
+                    for kpi, kp in pairs(keywords) do
+                        local kws = kp:split(' ')
+                        local findResult = findSubArray(words, kws)
+
+                        for idx, _ in pairs(findResult) do
+                            labelArray[idx] = 1
                         end
                     end
 
                     table.insert(dataList, torch.LongTensor(idxArray))
                     table.insert(labelList, torch.DoubleTensor(labelArray))
+                    table.insert(kwList, jo['keyword'])
 
                     -- table.insert(dataList, torch.LongTensor(maxAbsLength):fill(1)[{{1, wordsNum}}]:copy(torch.Tensor(idxArray)))
                     -- table.insert(labelList, torch.DoubleTensor(maxAbsLength):fill(0)[{{1, wordsNum}}]:copy(torch.Tensor(labelArray)))
@@ -204,9 +250,33 @@ function processKe20k(dir)
 
         -- Serialization
         local obj = {data = dataList, label = labelList}
-        torch.save(fileName .. ".nostem.nopunc.nosmooth.case.t7", obj)
+        torch.save(dirName .. '/' .. fileName .. ".t7", obj)
 
         file:close()
+
+        local sampleDataFile = io.open(dirName .. '/' .. fileName .. '.sample.txt', 'w')
+
+        for i = 1, sampleSize do
+            local rIdx = math.random(1, tableSize(dataList))
+            local wordIdxList = dataList[rIdx]
+            local label = labelList[rIdx]
+            local kw = kwList[rIdx]
+
+            sampleDataFile:write(kw .. '\n')
+
+            for ii = 1, wordIdxList:size(1) do
+                local idx = wordIdxList[ii]
+                local wordString = idx2word[idx]
+                if wordString == nil then
+                    wordString = 'UKN'
+                end
+                local wline = label:storage()[ii] .. '\t' .. wordString .. '\n'
+
+                sampleDataFile:write(wline)
+            end
+        end
+
+        sampleDataFile:close()
     end
 
     local i2v = torch.DoubleTensor(wordNum + 2, 300)
@@ -216,14 +286,14 @@ function processKe20k(dir)
     end
 
     local vocab = {idx2word = idx2word, idx2vec = i2v, word2idx = word2idx, word2count = word2count, size = wordNum}
-               -- {idx2word: ["word1", "word2"],
-               --  idx2vec: Tensor,
-               --  word2idx: {word1: idx,
-               --             word2: idx},
-               --  word2count: {word1: count,
-               --               word2: count}}
+    -- {idx2word: ["word1", "word2"],
+    --  idx2vec: Tensor,
+    --  word2idx: {word1: idx,
+    --             word2: idx},
+    --  word2count: {word1: count,
+    --               word2: count}}
 
-    torch.save("ke20k.nostem.nopunc.case.vocab.t7", vocab)
+    torch.save(dirName .. "/ke20k.nostem.nopunc.case.vocab.t7", vocab)
 
     print("")
     print("Vocab Size: " .. wordNum)
@@ -259,10 +329,10 @@ end
 function tokenizeWithPunctuation(str)
     str = processAbbreviation(str)
     str = str:gsub("'t[^a-zA-Z0-9]", "～t～ ")
-          :gsub("'d[^a-zA-Z0-9]", "～d～ ")
-          :gsub("'s[^a-zA-Z0-9]", "～s～ ")
-          :gsub("(%w)-(%w)", "%1～m～%2")
-          :gsub("(%w)_(%w)", "%1～u～%2")
+    :gsub("'d[^a-zA-Z0-9]", "～d～ ")
+    :gsub("'s[^a-zA-Z0-9]", "～s～ ")
+    :gsub("(%w)-(%w)", "%1～m～%2")
+    :gsub("(%w)_(%w)", "%1～u～%2")
     str = str:gsub("(%p)", " %1 ")
     str:trimAll()
     str = str:gsub("～t～", "'t"):gsub("～d～", "'d"):gsub("～s～", "'s"):gsub("～m～", "-"):gsub("～u～", "_")
@@ -274,18 +344,15 @@ end
 function tokenize(str)
     str = processAbbreviation(str)
     str = str:gsub("'t[^a-zA-Z0-9]", "～t～ ")
-          :gsub("'d[^a-zA-Z0-9]", "～d～ ")
-          :gsub("'s[^a-zA-Z0-9]", "～s～ ")
-          :gsub("(%w)-(%w)", "%1～m～%2")
-          :gsub("(%w)_(%w)", "%1～u～%2")
+    :gsub("'d[^a-zA-Z0-9]", "～d～ ")
+    :gsub("'s[^a-zA-Z0-9]", "～s～ ")
+    :gsub("(%w)-(%w)", "%1～m～%2")
+    :gsub("(%w)_(%w)", "%1～u～%2")
     str = str:gsub("%p", " ")
     str:trimAll()
     str = str:gsub("～t～", "'t"):gsub("～d～", "'d"):gsub("～s～", "'s"):gsub("～m～", "-"):gsub("～u～", "_")
 
     return str:split(" ")
 end
-
-
-local dirName = '/mnt/workspaces/ydtian/CNN-Keyword-Extraction/data'
 
 processKe20k(dirName)
