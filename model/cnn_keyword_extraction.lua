@@ -1,6 +1,5 @@
-print("Start time： " .. os.time())
+print("Start time: " .. os.time())
 
--- require('mobdebug').start()
 require 'nn'
 require 'torch'
 require 'optim'
@@ -20,20 +19,25 @@ require 'optim'
 --  }
 
 -- Options
+local options = {}
+
 local epoch = 10
-local batchSize = 1
+local batchSize = 128
 local lr = 0.01
 local lrd = 10
 local gpu = false
 local kernalWidth = 7
 local convLayer = 4
-local logInterval = 100
+local logInterval = 5000
 local fineTune = false
+local maxAbsLength = 500
+local embDimension = 300
+local channelSize = 500
 
 local optimState = {learningRate = lr}
 
-local rawDataset = torch.load('../data/nostem.nopunc.case/discrete/ke20k_training.t7')
-local evalData = torch.load('../data/nostem.nopunc.case/discrete/ke20k_validation.t7')
+local rawDataset = torch.load('../data/nostem.nopunc.case/discrete/ke20k_training.json.t7')
+local validData = torch.load('../data/nostem.nopunc.case/discrete/ke20k_validation.json.t7')
 local vocab = torch.load('../data/nostem.nopunc.case/ke20k.nostem.nopunc.case.vocab.t7')
 
 local emb = vocab.idx2vec
@@ -41,21 +45,24 @@ local emb = vocab.idx2vec
 local data = rawDataset.data
 local label = rawDataset.label
 local dataSize = #data
+local validDataSize = 200 -- TODO 强行减小eval data size
 
-local sample = data[2]
 
 -- Build logger
 local logger = optim.Logger('training.log')
 logger:setNames{'training loss', 'validation loss'}
 logger:style{'+-', '+-'}
 
--- Build training data
-local dataset = {}
-local batchedDataset = {}
 
-function dataset:size()
-    return dataSize
-end
+-- Build training data
+--local dataset = {}
+local batchedDataset = {}
+local validDataset = {}
+
+--function dataset:size()
+--    return dataSize
+--end
+
 
 function table.slice(tbl, first, last, step)
     local sliced = {}
@@ -67,124 +74,166 @@ function table.slice(tbl, first, last, step)
     return sliced
 end
 
-for i = 1, dataSize do
-    table.insert(dataset, {data = {emb, data[i]}, label = label[i]})
-end
+
+--for i = 1, dataSize do
+--    table.insert(dataset, {data = {emb, data[i]}, label = label[i]})
+--end
+
 
 -- Batch 化数据
-local i = 1
-local tmpDataTable = {}
-local tmpLabelTable = {}
+-- Training data
+print("Making batch training data...")
+local i = 1 -- Data index
 
-while batchSize ~= 1 and i < dataSize do
-    table.insert(tmpDataTable, emb:index(1, data[i]))
-    table.insert(tmpLabelTable, label[i])
+while i <= dataSize do -- 每次生成一个batch
+    local batchData = torch.LongTensor(batchSize * maxAbsLength):fill(1)
+    local batchLabel = torch.DoubleTensor(batchSize, maxAbsLength):fill(0)
+    --local batchIndex = math.ceil(i / batchSize)
 
-    if i % batchSize == 0 or i == dataSize then
-        table.insert(batchedDataset, {data = torch.cat(tmpDataTable, 1), label = torch.cat(tmpLabelTable, 2)})
-        tmpDataTable = {}
-        tmpLabelTable = {}
+    for dataIndex = 1, batchSize do
+        if i <= dataSize then
+            local oneData = data[i]
+            local oneLabel = label[i]
+            local len = oneData:size(1)
+            local padSize = maxAbsLength - len
+            local startPos = 1 + math.floor(padSize / 2)
+            local endPos = maxAbsLength - math.ceil(padSize / 2)
+            local dataBase = (dataIndex - 1) * maxAbsLength
+
+            batchData[{{dataBase + startPos, dataBase + endPos}}]:copy(oneData)
+            batchLabel[dataIndex][{{startPos, endPos}}]:copy(oneLabel)
+            i = i + 1
+        else
+            i = i + 1
+            break
+        end
+
+        io.write('\riter: ' .. i)
+        io.flush()
     end
 
+    table.insert(batchedDataset, {data = {emb, batchData}, label = batchLabel})
+end
+print("Finished batch data building.")
+
+-- Evaluation data
+print("Making validation data...")
+local validBatchData = torch.LongTensor(validDataSize * maxAbsLength):fill(1)
+local validBatchLabel = torch.DoubleTensor(validDataSize, maxAbsLength):fill(0)
+
+i = 1
+while i <= validDataSize do -- 每次生成一个batch
+    local oneData = validData.data[i]
+    local oneLabel = validData.label[i]
+    local len = oneData:size(1)
+    local padSize = maxAbsLength - len
+    local startPos = 1 + math.floor(padSize / 2)
+    local endPos = maxAbsLength - math.ceil(padSize / 2)
+    local dataBase = (i - 1) * maxAbsLength
+
+    validBatchData[{{dataBase + startPos, dataBase + endPos}}]:copy(oneData)
+    validBatchLabel[i][{{startPos, endPos}}]:copy(oneLabel)
     i = i + 1
+
+    io.write('\riter: ' .. i)
+    io.flush()
 end
 
---local evaluationData = torch.cat()
-
+local validMask = torch.ne(validBatchData, 1):double():reshape(validDataSize, maxAbsLength)
+validDataset = {data = {emb, validBatchData }, label = validBatchLabel, mask = validMask, num = validMask:sum()}
+print('\rFinished evaluation data building.')
 -- Batch 化数据
 
--- Build model
--- Build index
-local lookup = nn.Sequential()
-lookup:add(nn.Index(1))
+------------------------------------------------------------------------------------------------------------------------
+-- Build MODEL
+-- MODEL Build index
+local modelLookup = nn.Sequential()
+modelLookup:add(nn.Index(1))
 
--- Build padding
+
+-- MODEL Build reshape
+local modelReshape = nn.Reshape(batchSize, maxAbsLength, embDimension)
+
+
+-- MODEL Build padding
 local leftPadSize = math.floor((kernalWidth - 1) / 2)
 local rightPadSize = kernalWidth - 1 - leftPadSize
-local pad = nn.Sequential():add(nn.Padding(1, -leftPadSize)):add(nn.Padding(1, rightPadSize))
+local modelPadding = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
 
--- Build convolution
-local cnn = nn.Sequential()
---cnn:add(nn.TemporalRowConvolution(300, kernalWidth, 30)):add(nn.ReLU()):add(nn.Linear(300, 1024)):add(nn.Linear(1024, 10)):add(nn.SoftMax())
-cnn:add(nn.TemporalConvolution(300, 500, kernalWidth)):add(nn.LeakyReLU())
+
+-- MODEL Build convolution
+local modelConvolution = nn.Sequential()
+modelConvolution:add(nn.TemporalConvolution(300, channelSize, kernalWidth)):add(nn.LeakyReLU())
 for i = 1, convLayer - 3 do
-    local lpad = nn.Sequential():add(nn.Padding(1, -leftPadSize)):add(nn.Padding(1, rightPadSize))
-    cnn:add(lpad):add(nn.TemporalConvolution(500, 500, kernalWidth)):add(nn.LeakyReLU())
+    local localPad = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
+    modelConvolution:add(localPad):add(nn.TemporalConvolution(channelSize, channelSize, kernalWidth)):add(nn.LeakyReLU())
 end
-local lpad = nn.Sequential():add(nn.Padding(1, -leftPadSize)):add(nn.Padding(1, rightPadSize))
-cnn:add(lpad):add(nn.TemporalConvolution(500, 250, kernalWidth)):add(nn.LeakyReLU())
-lpad = nn.Sequential():add(nn.Padding(1, -leftPadSize)):add(nn.Padding(1, rightPadSize))
-cnn:add(lpad):add(nn.TemporalConvolution(250, 1, kernalWidth)):add(nn.Sigmoid())
 
--- Build whole model
+local finalPad = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
+modelConvolution:add(finalPad):add(nn.TemporalConvolution(channelSize, math.floor(channelSize / 2), kernalWidth)):add(nn.LeakyReLU())
+finalPad = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
+modelConvolution:add(finalPad):add(nn.TemporalConvolution(math.floor(channelSize / 2), 1, kernalWidth)):add(nn.Sigmoid())
+
+
+-- MODEL Build whole model
 local model = nn.Sequential()
-local padding = nn.Sequential():add(lookup):add(pad)
-model:add(padding):add(cnn):add(nn.Reshape())
+local padding = nn.Sequential():add(modelLookup):add(modelReshape):add(modelPadding)
+model:add(padding):add(modelConvolution):add(nn.Reshape(batchSize, maxAbsLength))
 
 
 -- Build criterion
---local criterion = nn.MSECriterion()
-local criterion = nn.AbsCriterion()
+local criterion = nn.MSECriterion()
 criterion.sizeAverage = false
+
 local eval = nn.AbsCriterion()
+------------------------------------------------------------------------------------------------------------------------
 
-
-print(cnn)
---local sampleData = dataset[300][1]
---local sampleLabel = dataset[300][2]
---print(sampleLabel:size())
---local output = model:forward(sampleData)
-----print("Output: ", output)
-----print("Label: ", sampleLabel)
---local loss = criterion:forward(output, sampleLabel)
---print(loss)
-
-
--- Trainer
---local trainer = nn.StochasticGradient(model, criterion)
---trainer.learningRate = 0.01
-
+print(modelConvolution)
 
 -- Trainging
---for i = 1, epoch do
---    print("Training epoch " .. i)
---    trainer:train(dataset)
---end
 params, gradParams = model:getParameters()
 local optimState = {learningRate = lr}
-local errorDataNum = 0
+--local errorDataNum = 0
 
 for iter = 1, epoch do
-    for i, v in ipairs(dataset) do
-        --local mask = torch.ne(v.data, 0):typeAs(torch.DoubleTensor())
+    print('\nTraining epoch ' .. iter .. '\n')
+
+    for i, v in ipairs(batchedDataset) do
+        io.write('\rBatch number: ' .. i)
+        io.flush()
+        local mask = torch.ne(v.data[2], 1):double():reshape(batchSize, maxAbsLength)
+        local num = mask:sum() -- Real Abstract length
 
         function feval(params)
             gradParams:zero()
 
             local outputs = model:forward(v.data)
-            --outputs:cmul(mask)
+            outputs:cmul(mask)
 
-            if outputs:size(1) == v.label:size(1) then
+            assert(outputs:size(1) == v.label:size(1))
+            --if outputs:size(1) == v.label:size(1) then
                 local loss = criterion:forward(outputs, v.label)
                 local dloss_doutputs = criterion:backward(outputs, v.label)
                 model:backward(v.data, dloss_doutputs)
 
                 return loss, gradParams
-            else
-                errorDataNum = errorDataNum + 1
-                return 0, gradParams
-            end
+            --else
+            --    errorDataNum = errorDataNum + 1
+            --    return 0, gradParams
+            --end
         end
 
         _, l = optim.sgd(feval, params, optimState)
 
-        if i % logInterval == 0 or i == 1 then
+        if i % math.floor(logInterval / batchSize) == 0 or i == 1 then
             -- Log loss and plot
-            --local output = model:forward(v.data)
-            --local loss = criterion:forward(output, v.label)
-            -- local validationLoss = -- Calculate validation loss
+            --local validationOutput = model:forward(validDataset.data)
+            --validationOutput:cmul(validDataset.mask)
+            --
+            --local validationLoss = eval:forward(validationOutput, validDataset.label) / validDataset.num
             local validationLoss = 0
-            print("Error Data Number: " .. errorDataNum)
+
+            l[1] = l[1] / num
 
             logger:add(l, validationLoss)
             logger:plot()
@@ -192,4 +241,4 @@ for iter = 1, epoch do
     end
 end
 
-print("End time： " .. os.time())
+print("End time: " .. os.time())
