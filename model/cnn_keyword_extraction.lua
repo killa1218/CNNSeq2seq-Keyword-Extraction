@@ -28,7 +28,7 @@ local lrd = 10
 local gpu = true
 local kernalWidth = 7
 local convLayer = 4
-local logInterval = 5000
+local logInterval = 1000
 local fineTune = false
 local maxAbsLength = 500
 local embDimension = 300
@@ -60,7 +60,7 @@ local validDataSize = 128 -- TODO 强行减小eval data size
 -- Build logger
 local logger = optim.Logger('training.cuda.log')
 logger:setNames{'training loss', 'validation loss'}
-logger:style{'+-', '+-'}
+logger:style{'.-', '.-'}
 
 
 -- Build training data
@@ -244,7 +244,7 @@ for iter = 1, epoch do
 
         _, l = optim.sgd(feval, params, optimState)
 
-        if i % math.floor(logInterval / batchSize) == 0 or i == 1 then
+        if i % math.floor(logInterval / batchSize) == 0 then
             -- Log loss and plot
             local validationOutput = model:forward(validDataset.data)
             validationOutput:cmul(validDataset.mask)
@@ -253,9 +253,9 @@ for iter = 1, epoch do
              validationLoss = validationLoss / validDataset.num
             --local validationLoss = 0
 
-            l[1] = l[1] / num
+            local lossPair = {l[1] / num, validationLoss}
 
-            logger:add(l, validationLoss)
+            logger:add(lossPair)
             logger:plot()
         end
     end
