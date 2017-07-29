@@ -5,12 +5,14 @@ glove = require 'glove.glove'
 math.randomseed(os.time())
 
 local minAbsLength = 20
-local maxAbsLength = 800
+local maxAbsLength = 500
 local minWordCount = 10
 local wordCountPath = "/mnt/workspaces/ydtian/CNN-Keyword-Extraction/data/nostem.nopunc.case/ke20k.wordcnt.nostem.nopunc.case.t7"
 local saveWordCount = nil
 local sampleSize = 50
 local dirName = '/mnt/workspaces/ydtian/CNN-Keyword-Extraction/data'
+local smoothing = false
+local withPunctuation = false
 
 function string:split(sep)
     local sep, fields = sep or " ", {}
@@ -84,6 +86,10 @@ function findSubArray(tb, subTable)
 
             if allEq then
                 for k, _ in pairs(tmpres) do
+                    if k > #tb then
+                        break
+                    end
+
                     res[k] = true
                 end
             end
@@ -110,7 +116,6 @@ function processKe20k(dir)
     local longestAbs = 0
     local shortestAbs = 100000
     local absTotalLeng = 0 -- Total length of abs.
-    local keywordsRecord = {}
 
     local tmpWord2count = {} -- Count words for futher filting by count
     if wordCountPath ~= nil then
@@ -216,12 +221,20 @@ function processKe20k(dir)
                             end
 
                             table.insert(idxArray, word2idx[w])
-                            table.insert(labelArray, calcSimWithPhrases(w, keywords)) -- Smoothing
-                            --table.insert(labelArray, 0) -- No smoothing
+
+                            if smoothing then
+                                table.insert(labelArray, calcSimWithPhrases(w, keywords)) -- Smoothing
+                            else
+                                table.insert(labelArray, 0) -- No smoothing
+                            end
                         else
                             table.insert(idxArray, 2)
-                            table.insert(labelArray, calcSimWithPhrases("UNK", keywords)) -- Smoothing
-                            --table.insert(labelArray, 0) -- No smoothing
+
+                            if smoothing then
+                                table.insert(labelArray, calcSimWithPhrases("UNK", keywords)) -- Smoothing
+                            else
+                                table.insert(labelArray, 0) -- No smoothing
+                            end
                         end
                     end
 
@@ -235,8 +248,18 @@ function processKe20k(dir)
                         end
                     end
 
-                    table.insert(dataList, torch.LongTensor(idxArray))
-                    table.insert(labelList, torch.DoubleTensor(labelArray))
+                    local dataTensor = torch.LongTensor(idxArray)
+                    local labelTensor = torch.DoubleTensor(labelArray)
+
+                    if dataTensor:size(1) ~= labelTensor:size(1) then
+                        print(abstract)
+                        print(keywords)
+                    end
+
+                    assert(dataTensor:size(1) == labelTensor:size(1))
+
+                    table.insert(dataList, dataTensor)
+                    table.insert(labelList, labelTensor)
                     table.insert(kwList, jo['keyword'])
 
                     -- table.insert(dataList, torch.LongTensor(maxAbsLength):fill(1)[{{1, wordsNum}}]:copy(torch.Tensor(idxArray)))
@@ -326,29 +349,22 @@ function processAbbreviation(str)
 end
 
 
-function tokenizeWithPunctuation(str)
-    str = processAbbreviation(str)
-    str = str:gsub("'t[^a-zA-Z0-9]", "～t～ ")
-    :gsub("'d[^a-zA-Z0-9]", "～d～ ")
-    :gsub("'s[^a-zA-Z0-9]", "～s～ ")
-    :gsub("(%w)-(%w)", "%1～m～%2")
-    :gsub("(%w)_(%w)", "%1～u～%2")
-    str = str:gsub("(%p)", " %1 ")
-    str:trimAll()
-    str = str:gsub("～t～", "'t"):gsub("～d～", "'d"):gsub("～s～", "'s"):gsub("～m～", "-"):gsub("～u～", "_")
-
-    return str:split(" ")
-end
-
-
 function tokenize(str)
+    -- TODO Do stemming, case, phrase chunk HERE
+
     str = processAbbreviation(str)
     str = str:gsub("'t[^a-zA-Z0-9]", "～t～ ")
     :gsub("'d[^a-zA-Z0-9]", "～d～ ")
     :gsub("'s[^a-zA-Z0-9]", "～s～ ")
     :gsub("(%w)-(%w)", "%1～m～%2")
     :gsub("(%w)_(%w)", "%1～u～%2")
-    str = str:gsub("%p", " ")
+
+    if withPunctuation then
+        str = str:gsub("(%p)", " %1 ")
+    else
+        str = str:gsub("%p", " ")
+    end
+
     str:trimAll()
     str = str:gsub("～t～", "'t"):gsub("～d～", "'d"):gsub("～s～", "'s"):gsub("～m～", "-"):gsub("～u～", "_")
 
