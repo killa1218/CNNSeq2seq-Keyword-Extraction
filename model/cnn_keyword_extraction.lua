@@ -204,6 +204,12 @@ local criterion = nn.MSECriterion()
 criterion.sizeAverage = false
 
 local eval = nn.AbsCriterion()
+
+if gpu then
+    model = model:cuda()
+    criterion = criterion:cuda()
+    eval = eval:cuda()
+end
 ------------------------------------------------------------------------------------------------------------------------
 
 print(modelConvolution)
@@ -212,12 +218,6 @@ print(modelConvolution)
 params, gradParams = model:getParameters()
 local optimState = {learningRate = lr}
 --local errorDataNum = 0
-
-if gpu then
-    model = model:cuda()
-    criterion = criterion:cuda()
-end
-
 
 for iter = 1, epoch do
     print('\nTraining epoch ' .. iter .. '\n')
@@ -239,16 +239,12 @@ for iter = 1, epoch do
             outputs:cmul(mask)
 
             assert(outputs:size(1) == v.label:size(1))
-            --if outputs:size(1) == v.label:size(1) then
+
             local loss = criterion:forward(outputs, v.label)
             local dloss_doutputs = criterion:backward(outputs, v.label)
             model:backward(v.data, dloss_doutputs)
 
             return loss, gradParams
-            --else
-            --    errorDataNum = errorDataNum + 1
-            --    return 0, gradParams
-            --end
         end
 
         _, l = optim.sgd(feval, params, optimState)
