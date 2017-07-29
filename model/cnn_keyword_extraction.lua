@@ -25,7 +25,7 @@ local epoch = 10
 local batchSize = 128
 local lr = 0.01
 local lrd = 10
-local gpu = false
+local gpu = true
 local kernalWidth = 7
 local convLayer = 4
 local logInterval = 5000
@@ -33,6 +33,11 @@ local fineTune = false
 local maxAbsLength = 500
 local embDimension = 300
 local channelSize = 500
+
+if gpu then
+    require 'cunn'
+    require 'cutorch'
+end
 
 local optimState = {learningRate = lr}
 
@@ -42,6 +47,10 @@ local vocab = torch.load('../data/nostem.nopunc.case/ke20k.nostem.nopunc.case.vo
 
 local emb = vocab.idx2vec
 
+if gpu then
+    emb = emb:cuda()
+end
+
 local data = rawDataset.data
 local label = rawDataset.label
 local dataSize = #data
@@ -49,7 +58,7 @@ local validDataSize = 200 -- TODO 强行减小eval data size
 
 
 -- Build logger
-local logger = optim.Logger('training.log')
+local logger = optim.Logger('training.cuda.log')
 logger:setNames{'training loss', 'validation loss'}
 logger:style{'+-', '+-'}
 
@@ -112,11 +121,15 @@ while i <= dataSize do -- 每次生成一个batch
         io.flush()
     end
 
-    table.insert(batchedDataset, {data = {emb, batchData}, label = batchLabel})
+    if gpu then
+        table.insert(batchedDataset, {data = {emb, batchData:cuda()}, label = batchLabel:cuda()})
+    else
+        table.insert(batchedDataset, {data = {emb, batchData}, label = batchLabel})
+    end
 end
 print("Finished batch data building.")
 
--- Evaluation data
+-- Validation data
 print("Making validation data...")
 local validBatchData = torch.LongTensor(validDataSize * maxAbsLength):fill(1)
 local validBatchLabel = torch.DoubleTensor(validDataSize, maxAbsLength):fill(0)
@@ -140,8 +153,13 @@ while i <= validDataSize do -- 每次生成一个batch
 end
 
 local validMask = torch.ne(validBatchData, 1):double():reshape(validDataSize, maxAbsLength)
-validDataset = {data = {emb, validBatchData }, label = validBatchLabel, mask = validMask, num = validMask:sum()}
-print('\rFinished evaluation data building.')
+
+if gpu then
+    validDataset = {data = {emb, validBatchData:cuda() }, label = validBatchLabel:cuda(), mask = validMask:cuda(), num = validMask:sum()}
+else
+    validDataset = {data = {emb, validBatchData}, label = validBatchLabel, mask = validMask, num = validMask:sum()}
+end
+print('\rFinished validation data building.')
 -- Batch 化数据
 
 ------------------------------------------------------------------------------------------------------------------------
@@ -195,6 +213,12 @@ params, gradParams = model:getParameters()
 local optimState = {learningRate = lr}
 --local errorDataNum = 0
 
+if gpu then
+    model = model:cuda()
+    criterion = criterion:cuda()
+end
+
+
 for iter = 1, epoch do
     print('\nTraining epoch ' .. iter .. '\n')
 
@@ -204,6 +228,10 @@ for iter = 1, epoch do
         local mask = torch.ne(v.data[2], 1):double():reshape(batchSize, maxAbsLength)
         local num = mask:sum() -- Real Abstract length
 
+        if gpu then
+            mask = mask:cuda()
+        end
+
         function feval(params)
             gradParams:zero()
 
@@ -212,11 +240,11 @@ for iter = 1, epoch do
 
             assert(outputs:size(1) == v.label:size(1))
             --if outputs:size(1) == v.label:size(1) then
-                local loss = criterion:forward(outputs, v.label)
-                local dloss_doutputs = criterion:backward(outputs, v.label)
-                model:backward(v.data, dloss_doutputs)
+            local loss = criterion:forward(outputs, v.label)
+            local dloss_doutputs = criterion:backward(outputs, v.label)
+            model:backward(v.data, dloss_doutputs)
 
-                return loss, gradParams
+            return loss, gradParams
             --else
             --    errorDataNum = errorDataNum + 1
             --    return 0, gradParams
@@ -230,7 +258,8 @@ for iter = 1, epoch do
             --local validationOutput = model:forward(validDataset.data)
             --validationOutput:cmul(validDataset.mask)
             --
-            --local validationLoss = eval:forward(validationOutput, validDataset.label) / validDataset.num
+            --local validationLoss = eval:forward(validationOutput, validDataset.label)
+            -- validationLoss = validationLoss / validDataset.num
             local validationLoss = 0
 
             l[1] = l[1] / num
