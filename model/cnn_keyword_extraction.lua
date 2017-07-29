@@ -54,7 +54,7 @@ end
 local data = rawDataset.data
 local label = rawDataset.label
 local dataSize = #data
-local validDataSize = 200 -- TODO 强行减小eval data size
+local validDataSize = 128 -- TODO 强行减小eval data size
 
 
 -- Build logger
@@ -97,7 +97,6 @@ local i = 1 -- Data index
 while i <= dataSize do -- 每次生成一个batch
     local batchData = torch.LongTensor(batchSize * maxAbsLength):fill(1)
     local batchLabel = torch.DoubleTensor(batchSize, maxAbsLength):fill(0)
-    --local batchIndex = math.ceil(i / batchSize)
 
     for dataIndex = 1, batchSize do
         if i <= dataSize then
@@ -135,7 +134,7 @@ local validBatchData = torch.LongTensor(validDataSize * maxAbsLength):fill(1)
 local validBatchLabel = torch.DoubleTensor(validDataSize, maxAbsLength):fill(0)
 
 i = 1
-while i <= validDataSize do -- 每次生成一个batch
+while i <= validDataSize do
     local oneData = validData.data[i]
     local oneLabel = validData.label[i]
     local len = oneData:size(1)
@@ -155,7 +154,7 @@ end
 local validMask = torch.ne(validBatchData, 1):double():reshape(validDataSize, maxAbsLength)
 
 if gpu then
-    validDataset = {data = {emb, validBatchData:cuda() }, label = validBatchLabel:cuda(), mask = validMask:cuda(), num = validMask:sum()}
+    validDataset = {data = {emb, validBatchData:cuda()}, label = validBatchLabel:cuda(), mask = validMask:cuda(), num = validMask:sum()}
 else
     validDataset = {data = {emb, validBatchData}, label = validBatchLabel, mask = validMask, num = validMask:sum()}
 end
@@ -203,12 +202,9 @@ model:add(padding):add(modelConvolution):add(nn.Reshape(batchSize, maxAbsLength)
 local criterion = nn.MSECriterion()
 criterion.sizeAverage = false
 
-local eval = nn.AbsCriterion()
-
 if gpu then
     model = model:cuda()
     criterion = criterion:cuda()
-    eval = eval:cuda()
 end
 ------------------------------------------------------------------------------------------------------------------------
 
@@ -217,7 +213,6 @@ print(modelConvolution)
 -- Trainging
 params, gradParams = model:getParameters()
 local optimState = {learningRate = lr}
---local errorDataNum = 0
 
 for iter = 1, epoch do
     print('\nTraining epoch ' .. iter .. '\n')
@@ -251,12 +246,12 @@ for iter = 1, epoch do
 
         if i % math.floor(logInterval / batchSize) == 0 or i == 1 then
             -- Log loss and plot
-            --local validationOutput = model:forward(validDataset.data)
-            --validationOutput:cmul(validDataset.mask)
-            --
-            --local validationLoss = eval:forward(validationOutput, validDataset.label)
-            -- validationLoss = validationLoss / validDataset.num
-            local validationLoss = 0
+            local validationOutput = model:forward(validDataset.data)
+            validationOutput:cmul(validDataset.mask)
+
+            local validationLoss = criterion:forward(validationOutput, validDataset.label)
+             validationLoss = validationLoss / validDataset.num
+            --local validationLoss = 0
 
             l[1] = l[1] / num
 
