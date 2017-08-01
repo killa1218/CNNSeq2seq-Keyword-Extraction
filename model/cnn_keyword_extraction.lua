@@ -23,8 +23,8 @@ local options = {}
 
 local epoch = 10
 local batchSize = 128
-local lr = 0.01
-local lrd = 10
+local lr = 0.001
+local lrd = 0.05
 local gpu = true
 local kernalWidth = 7
 local convLayer = 4
@@ -39,8 +39,6 @@ if gpu then
     require 'cutorch'
 end
 
-local optimState = {learningRate = lr}
-
 local rawDataset = torch.load('../data/nostem.nopunc.case/discrete/ke20k_training.json.t7')
 local validData = torch.load('../data/nostem.nopunc.case/discrete/ke20k_validation.json.t7')
 local vocab = torch.load('../data/nostem.nopunc.case/ke20k.nostem.nopunc.case.vocab.t7')
@@ -54,24 +52,18 @@ end
 local data = rawDataset.data
 local label = rawDataset.label
 local dataSize = #data
-local validDataSize = 128 -- TODO 强行减小eval data size
+local validDataSize = batchSize -- TODO 强行固定eval data size
 
 
 -- Build logger
 local logger = optim.Logger('training.cuda.log')
 logger:setNames{'training loss', 'validation loss'}
-logger:style{'.-', '.-'}
+logger:style{'-', '-'}
 
 
 -- Build training data
---local dataset = {}
 local batchedDataset = {}
 local validDataset = {}
-
---function dataset:size()
---    return dataSize
---end
-
 
 function table.slice(tbl, first, last, step)
     local sliced = {}
@@ -82,11 +74,6 @@ function table.slice(tbl, first, last, step)
 
     return sliced
 end
-
-
---for i = 1, dataSize do
---    table.insert(dataset, {data = {emb, data[i]}, label = label[i]})
---end
 
 
 -- Batch 化数据
@@ -177,17 +164,17 @@ local leftPadSize = math.floor((kernalWidth - 1) / 2)
 local rightPadSize = kernalWidth - 1 - leftPadSize
 local modelPadding = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
 
-
 -- MODEL Build convolution
 local modelConvolution = nn.Sequential()
-modelConvolution:add(nn.TemporalConvolution(300, channelSize, kernalWidth)):add(nn.LeakyReLU())
+--modelConvolution:add(nn.TemporalConvolution(300, 1, kernalWidth)):add(nn.Sigmoid())
+modelConvolution:add(nn.TemporalConvolution(300, channelSize, kernalWidth)):add(nn.Sigmoid())
 for i = 1, convLayer - 3 do
     local localPad = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
-    modelConvolution:add(localPad):add(nn.TemporalConvolution(channelSize, channelSize, kernalWidth)):add(nn.LeakyReLU())
+    modelConvolution:add(localPad):add(nn.TemporalConvolution(channelSize, channelSize, kernalWidth)):add(nn.Sigmoid())
 end
 
 local finalPad = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
-modelConvolution:add(finalPad):add(nn.TemporalConvolution(channelSize, math.floor(channelSize / 2), kernalWidth)):add(nn.LeakyReLU())
+modelConvolution:add(finalPad):add(nn.TemporalConvolution(channelSize, math.floor(channelSize / 2), kernalWidth)):add(nn.Sigmoid())
 finalPad = nn.Sequential():add(nn.Padding(2, -leftPadSize)):add(nn.Padding(2, rightPadSize))
 modelConvolution:add(finalPad):add(nn.TemporalConvolution(math.floor(channelSize / 2), 1, kernalWidth)):add(nn.Sigmoid())
 
@@ -199,20 +186,27 @@ model:add(padding):add(modelConvolution):add(nn.Reshape(batchSize, maxAbsLength)
 
 
 -- Build criterion
-local criterion = nn.MSECriterion()
-criterion.sizeAverage = false
+--local criterion = nn.MSECriterion()
+local criterion = nn.AbsCriterion()
 
 if gpu then
     model = model:cuda()
     criterion = criterion:cuda()
 end
 ------------------------------------------------------------------------------------------------------------------------
-
-print(modelConvolution)
+print(model)
 
 -- Trainging
 params, gradParams = model:getParameters()
-local optimState = {learningRate = lr}
+local optimConfig = {
+    learningRate = lr,
+    learningRateDecay = lrd,
+    weightDecay = 10,
+    beta1 = 0.9,
+    beta2 = 0.999,
+    epsilon = 1e-08
+}
+local lossFactor = batchSize * maxAbsLength
 
 for iter = 1, epoch do
     print('\nTraining epoch ' .. iter .. '\n')
@@ -242,7 +236,10 @@ for iter = 1, epoch do
             return loss, gradParams
         end
 
-        _, l = optim.sgd(feval, params, optimState)
+        _, l = optim.adam(feval, params, optimConfig)
+
+        io.write(' Learning Rate: ' .. lr / (1 + i * lrd))
+        io.flush()
 
         if i % math.floor(logInterval / batchSize) == 0 then
             -- Log loss and plot
@@ -250,10 +247,9 @@ for iter = 1, epoch do
             validationOutput:cmul(validDataset.mask)
 
             local validationLoss = criterion:forward(validationOutput, validDataset.label)
-             validationLoss = validationLoss / validDataset.num
-            --local validationLoss = 0
+            validationLoss = validationLoss / validDataset.num
 
-            local lossPair = {l[1] / num, validationLoss}
+            local lossPair = {lossFactor * l[1] / num, lossFactor * validationLoss}
 
             logger:add(lossPair)
             logger:plot()
