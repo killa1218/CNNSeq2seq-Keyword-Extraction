@@ -24,7 +24,7 @@ local options = {}
 local epoch = 10
 local batchSize = 128
 local lr = 0.001
-local lrd = 0.05
+local lrd = 0.07
 local gpu = true
 local kernalWidth = 7
 local convLayer = 4
@@ -57,8 +57,8 @@ local validDataSize = batchSize -- TODO 强行固定eval data size
 
 -- Build logger
 local logger = optim.Logger('training.cuda.log')
-logger:setNames{'training loss', 'validation loss'}
-logger:style{'-', '-'}
+logger:setNames{'training loss', 'validation loss', 'base line'}
+logger:style{'-', '-', '-'}
 
 
 -- Build training data
@@ -242,17 +242,19 @@ for iter = 1, epoch do
         io.flush()
 
         if i % math.floor(logInterval / batchSize) == 0 then
-            -- Log loss and plot
-            local validationOutput = model:forward(validDataset.data)
-            validationOutput:cmul(validDataset.mask)
+            pcall(function()
+                -- Log loss and plot
+                local validationOutput = model:forward(validDataset.data)
+                validationOutput:cmul(validDataset.mask)
 
-            local validationLoss = criterion:forward(validationOutput, validDataset.label)
-            validationLoss = validationLoss / validDataset.num
+                local validationLoss = criterion:forward(validationOutput, validDataset.label)
+                validationLoss = validationLoss / validDataset.num
 
-            local lossPair = {lossFactor * l[1] / num, lossFactor * validationLoss}
+                local lossPair = {lossFactor * l[1] / num, lossFactor * validationLoss, v.label:sum() / num}
 
-            logger:add(lossPair)
-            logger:plot()
+                logger:add(lossPair)
+                logger:plot()
+            end)
         end
     end
 end
